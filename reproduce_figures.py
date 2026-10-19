@@ -10,12 +10,14 @@ Usage
   python reproduce_figures.py --outdir DIR  # write PDF/PNG figures to DIR (default: figures/)
   python reproduce_figures.py --validate    # compare CSVs with recomputation and check static limits
   python reproduce_figures.py --report      # print the scattering-sector ratio
+  python reproduce_figures.py --validate --validation-json validation_results.json
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 import argparse
+import json
 import numpy as np
 import matplotlib as mpl
 mpl.use("Agg")
@@ -86,16 +88,9 @@ mpl.rcParams.update({
     "ps.fonttype":        42,
 })
 
-COLUMNWIDTH_FIGSIZE = (3.40, 1.82)
-COLUMN_LABELSIZE = 7.0
-COLUMN_TICKSIZE = 6.2
-COLUMN_LEGENDSIZE = 5.9
-COLUMN_TITLESIZE = 5.7
-COLUMN_PARAMSIZE = 5.3
-COLUMN_PANELSIZE = 7.4
-COLUMN_LINEWIDTH = 1.00
-COLUMN_AXIS_LINEWIDTH = 0.75
-COLUMN_REF_LINEWIDTH = 0.85
+FIGURE_LABELSIZE = 9.0
+FIGURE_TICKSIZE = 8.5
+FIGURE_LEGENDSIZE = 8.5
 
 # ---------------------------------------------------------------------------
 # Electromagnetic response functions
@@ -360,50 +355,33 @@ def load_csv(path: Path) -> np.ndarray:
 # ---------------------------------------------------------------------------
 # Plot helpers
 # ---------------------------------------------------------------------------
-def axis_label(axis: str) -> str:
-    """Return compact text for the projection axis used in annotations."""
-    return "(xx+yy)/2" if axis == "xyavg" else axis
+def panel_label(ax, label, fontsize=10.0):
+    ax.text(0.0, 1.04, label, transform=ax.transAxes,
+            ha="left", va="bottom", fontweight="bold", fontsize=fontsize)
 
 
-def parameter_label_column(axis: str = "zz", t: float = film_t) -> str:
-    """Return a short parameter label for a two-panel figure at column width."""
-    if axis == "xyavg":
-        return f"t={t*1e9:.0f} nm; sub=metal"
-    return f"t={t*1e9:.0f} nm; sub=metal; proj={axis_label(axis)}"
+def style_axes(axes):
+    for ax in np.ravel(axes):
+        ax.xaxis.label.set_size(FIGURE_LABELSIZE)
+        ax.yaxis.label.set_size(FIGURE_LABELSIZE)
+        ax.tick_params(axis="both", labelsize=FIGURE_TICKSIZE)
+        ax.grid(False)
 
 
-def panel_label(ax: mpl.axes.Axes, label: str, fontsize: float = 10.0) -> None:
-    """Place a panel label in axes coordinates."""
-    ax.text(0.055, 0.93, label, transform=ax.transAxes,
-            ha="left", va="top", fontweight="bold", fontsize=fontsize)
+def signed_scale(ax, threshold, ticks):
+    ax.set_yscale("symlog", linthresh=threshold)
+    ax.set_yticks(ticks)
+    ax.yaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda x, _: f"{x:g}"))
+    ax.yaxis.set_minor_locator(matplotlib.ticker.NullLocator())
+    ax.axhline(0, color="0.5", lw=0.7)
 
 
-def format_columnwidth_two_panel(ax) -> None:
-    """Apply final-print typography for a two-panel figure used at column width."""
-    for a in np.ravel(ax):
-        a.xaxis.label.set_size(COLUMN_LABELSIZE)
-        a.yaxis.label.set_size(COLUMN_LABELSIZE)
-        a.tick_params(axis="both", which="major",
-                      labelsize=COLUMN_TICKSIZE,
-                      width=COLUMN_AXIS_LINEWIDTH, length=2.35)
-        a.tick_params(axis="both", which="minor", width=0.60, length=1.45)
-        for spine in a.spines.values():
-            spine.set_linewidth(COLUMN_AXIS_LINEWIDTH)
-
-
-def plot_signed(ax: mpl.axes.Axes, x: np.ndarray, y: np.ndarray,
-                label: str, lw: float = 1.25) -> None:
-    """Plot signed data with solid positive and dashed negative segments."""
-    y = np.asarray(y, dtype=float)
-    pos = y >= 0.0
-    neg = y < 0.0
-    if np.any(pos):
-        line, = ax.plot(x, np.where(pos, y, np.nan), lw=lw, label=label)
-        color = line.get_color()
-        if np.any(neg):
-            ax.plot(x, np.where(neg, y, np.nan), lw=lw, ls="--", color=color)
-    else:
-        ax.plot(x, y, lw=lw, ls="--", label=label)
+def free_exchange_mHz(rho):
+    """Free-space zz exchange for equal-height, in-plane-separated moments."""
+    rho = np.asarray(rho, dtype=float)
+    x = k0 * rho
+    G = np.exp(1j*x) * (x*x + 1j*x - 1) / (4*np.pi*rho**3)
+    return omega_mHz(G)
 
 
 def savefig(fig: mpl.figure.Figure, outdir: Path,
@@ -432,7 +410,7 @@ def make_fig2(outdir: Path) -> None:
     vmin = min(np.nanmin(log_slab), np.nanmin(log_inf))
     vmax = max(np.nanmax(log_slab), np.nanmax(log_inf))
 
-    fig, ax = plt.subplots(1, 3, figsize=(8.1, 2.8),
+    fig, ax = plt.subplots(1, 3, figsize=(7.1, 2.7),
                            width_ratios=(1.0, 1.0, 1.05), layout="constrained")
 
     im0 = ax[0].pcolormesh(Bvals * 1e3, qvals, log_slab, shading="gouraud", vmin=vmin, vmax=vmax)
@@ -444,6 +422,8 @@ def make_fig2(outdir: Path) -> None:
         a.set_ylabel(r"$k_\perp L$")
         a.tick_params(axis="both", which="major", labelsize=8.8)
 
+    for a in ax[:2]:
+        a.axvline(B_on * 1e3, color="white", ls=":", lw=1.0)
     panel_label(ax[0], "(a)", fontsize=9.8)
     panel_label(ax[1], "(b)", fontsize=9.8)
 
@@ -470,7 +450,7 @@ def make_fig2(outdir: Path) -> None:
     ax[2].set_ylabel(r"$|r_{\mathrm{TE}}|$")
     ax[2].tick_params(axis="both", which="major", labelsize=8.8)
 
-    ax[2].set_title(r"$B=16.5$ mT", fontsize=8.4, loc="left", pad=5)
+    ax[2].set_title(r"$B=16.5$ mT", fontsize=8.5, loc="right", pad=9)
     panel_label(ax[2], "(c)", fontsize=9.8)
 
     ax[2].legend(frameon=True, loc="upper left", bbox_to_anchor=(0.06, 0.84),
@@ -481,108 +461,161 @@ def make_fig2(outdir: Path) -> None:
     savefig(fig, outdir, "Fig2_reflection_map")
 
 
-def make_kernel_pair(data: np.ndarray, outdir: Path, axis: str,
-                     filename: str, note: str | None = None) -> None:
-    """Generate a 1x2 signed decay/exchange kernel figure for a selected projection."""
-    rho_um = data[:, 0]
-    gam = [data[:, 1], data[:, 2], data[:, 3]]
-    om = [data[:, 4], data[:, 5], data[:, 6]]
-
-    fig, ax = plt.subplots(1, 2, figsize=COLUMNWIDTH_FIGSIZE, layout="constrained")
-
-    for i, label in enumerate(LABELS_3):
-        plot_signed(ax[0], rho_um, gam[i], label, lw=COLUMN_LINEWIDTH)
-        ax[1].plot(rho_um, om[i], lw=COLUMN_LINEWIDTH, label=label)
-
-    maxabs = max(np.max(np.abs(g)) for g in gam)
-    linthresh = max(maxabs * 1e-1, 1e-2)
-    ax[0].set_yscale("symlog", linthresh=linthresh)
-    ax[0].axhline(0.0, lw=COLUMN_AXIS_LINEWIDTH, color=REF_COLOR)
-
-    ax[0].yaxis.set_minor_locator(matplotlib.ticker.NullLocator())
-    ax[0].tick_params(axis="y", which="minor", left=False, right=False)
-
-    ax[0].set_xlabel(r"$\rho$ ($\mu$m)")
-    if axis == "zz":
-        ax[0].set_ylabel(r"$\delta\gamma_{12}/2\pi$ (mHz)")
-        ax[1].set_ylabel(r"$\Omega_{12}^{\mathrm{sc}}/2\pi$ (mHz)")
+def make_kernel_pair(data, outdir, axis, filename, note=None):
+    """Plot cavity corrections; add the total exchange for the main zz result."""
+    rho = data[:, 0]
+    main = axis == "zz"
+    if main:
+        fig, ax = plt.subplots(1, 3, figsize=(7.1, 2.75), layout="constrained")
     else:
-        ax[0].set_ylabel(r"$\delta\gamma_{12}^{\perp}/2\pi$ (mHz)")
-        ax[1].set_ylabel(r"$\Omega_{12}^{\mathrm{sc},\perp}/2\pi$ (mHz)")
-
-    if note:
-        ax[0].set_title(note, fontsize=COLUMN_TITLESIZE, loc="left", pad=3)
-
-    panel_label(ax[0], "(a)", fontsize=COLUMN_PANELSIZE)
-
-    ax[1].axhline(0.0, lw=COLUMN_AXIS_LINEWIDTH, color=REF_COLOR)
-    ax[1].set_xlabel(r"$\rho$ ($\mu$m)")
-    ax[1].legend(frameon=False, fontsize=COLUMN_LEGENDSIZE)
-    ax[1].set_title(parameter_label_column(axis=axis),
-                    fontsize=COLUMN_PARAMSIZE, loc="right", pad=3)
-    panel_label(ax[1], "(b)", fontsize=COLUMN_PANELSIZE)
-
-    format_columnwidth_two_panel(ax)
+        fig, ax = plt.subplots(2, 1, figsize=(3.4, 4.0), sharex=True, layout="constrained")
+    markers = ["o", "s", "^"]
+    for j, label in enumerate(LABELS_3):
+        kw = dict(color=COLORS[j], lw=1.3, marker=markers[j],
+                  markevery=35, ms=3, mfc="white", label=label)
+        ax[0].plot(rho, data[:, j+1], **kw)
+        ax[1].plot(rho, data[:, j+4], **kw)
+        if main:
+            ax[2].plot(rho, free_exchange_mHz(rho*1e-6)+data[:, j+4], **kw)
+    threshold = max(np.max(abs(data[:, 1:4]))*.1, .01)
+    signed_scale(ax[0], threshold, [-1, -.1, 0, .1, 1] if main else [-.1, 0, .1, 1])
+    ax[1].axhline(0, color="0.5", lw=.7)
+    proj = "zz" if main else r"\perp"
+    ax[0].set_ylabel(rf"$\delta\gamma_{{12}}^{{({proj})}}/(2\pi)$ (mHz)")
+    ax[1].set_ylabel(rf"$\Omega_{{12}}^{{\mathrm{{sc}},{proj}}}/(2\pi)$ (mHz)")
+    titles = ["Cross-decay correction", "Exchange correction"]
+    if main:
+        ax[2].plot(rho, free_exchange_mHz(rho*1e-6), color="0.3", ls="--", lw=1.2, label="Free space")
+        ax[2].set_yscale("log")
+        ax[2].set_ylabel(r"$\Omega_{12}^{zz}/(2\pi)$ (mHz)")
+        ax[2].legend(fontsize=7.8, frameon=False, loc="upper right", handlelength=1.6)
+        titles.append("Total exchange")
+    else:
+        ax[0].legend(fontsize=FIGURE_LEGENDSIZE, frameon=False, loc="upper right")
+    for j, a in enumerate(ax):
+        panel_label(a, f"({chr(97+j)})")
+        a.set_title(titles[j], fontsize=8.5, loc="right", pad=10)
+        a.set_xlabel(r"$\rho$ ($\mu$m)")
+    style_axes(ax)
     savefig(fig, outdir, filename)
 
 
-def make_fig4(data: np.ndarray, outdir: Path) -> None:
-    """Generate ideal bright-mode N_eff scaling curves."""
-    B_mT = data[:, 0]
-    gam_mHz = data[:, 1]
-    om_mHz = data[:, 2]
-
-    fig, ax = plt.subplots(1, 2, figsize=COLUMNWIDTH_FIGSIZE, layout="constrained")
-    for N in (1000, 5000):
-        ax[0].plot(B_mT, 2.0 * N * gam_mHz / 1e3, lw=COLUMN_LINEWIDTH,
-                   label=rf"$N_{{\mathrm{{eff}}}}={N}$")
-        ax[1].plot(B_mT, N * om_mHz / 1e3, lw=COLUMN_LINEWIDTH,
-                   label=rf"$N_{{\mathrm{{eff}}}}={N}$")
-
-    maxabs = np.max(np.abs(2.0 * 5000 * gam_mHz / 1e3))
-    ax[0].set_yscale("symlog", linthresh=max(maxabs * 1e-1, 1e-2))
-    ax[0].axhline(0.0, lw=COLUMN_AXIS_LINEWIDTH, color=REF_COLOR)
-    ax[0].axhline(1.0, ls=":", lw=COLUMN_REF_LINEWIDTH, color=REF_COLOR)
-    ax[0].axhline(-1.0, ls=":", lw=COLUMN_REF_LINEWIDTH, color=REF_COLOR)
-    ax[0].set_xlabel(r"$B$ (mT)")
-    ax[0].set_ylabel(r"$2\delta\gamma_{AB}^{\mathrm{br}}/2\pi$ (Hz)")
-    panel_label(ax[0], "(a)", fontsize=COLUMN_PANELSIZE)
-
-    ax[1].axhline(0.0, lw=COLUMN_AXIS_LINEWIDTH, color=REF_COLOR)
-    ax[1].axhline(1.0, ls=":", lw=COLUMN_REF_LINEWIDTH, color=REF_COLOR)
-    ax[1].axhline(-1.0, ls=":", lw=COLUMN_REF_LINEWIDTH, color=REF_COLOR)
-    ax[1].set_xlabel(r"$B$ (mT)")
-    ax[1].set_ylabel(r"$\Omega_{AB}^{\mathrm{br,sc}}/2\pi$ (Hz)")
-    ax[1].set_title(parameter_label_column(axis="zz"),
-                    fontsize=COLUMN_PARAMSIZE, loc="right", pad=3)
-    ax[1].legend(frameon=False, fontsize=COLUMN_LEGENDSIZE)
-    panel_label(ax[1], "(b)", fontsize=COLUMN_PANELSIZE)
-
-    format_columnwidth_two_panel(ax)
+def make_fig4(data, outdir):
+    """Cavity corrections for ideal uniform ensemble modes, in hertz."""
+    fig, ax = plt.subplots(1, 2, figsize=(7.1, 2.8), layout="constrained")
+    for j, N in enumerate((1000, 5000)):
+        kw = dict(color=COLORS[j], lw=1.4, marker=["o", "s"][j],
+                  markevery=45, ms=3.5, mfc="white", label=rf"$N_{{\mathrm{{eff}}}}={N}$")
+        ax[0].plot(data[:, 0], 2*N*data[:, 1]/1e3, **kw)
+        ax[1].plot(data[:, 0], N*data[:, 2]/1e3, **kw)
+    signed_scale(ax[0], max(np.max(abs(10*data[:, 1]))*.1, .01), [-10, -1, 0, 1, 10])
+    ax[1].axhline(0, color="0.5", lw=.7)
+    ax[0].set_ylabel(r"$2\delta\gamma_{AB}^{\mathrm{br},zz}/(2\pi)$ (Hz)")
+    ax[1].set_ylabel(r"$\Omega_{AB}^{\mathrm{br,sc},zz}/(2\pi)$ (Hz)")
+    for j, a in enumerate(ax):
+        a.axvline(B_on*1e3, color="0.5", ls=":", lw=1)
+        a.set_xlabel(r"$B$ (mT)")
+        panel_label(a, f"({chr(97+j)})")
+    ax[0].set_title("Linewidth-difference correction", loc="right", fontsize=9, pad=10)
+    ax[1].set_title("Exchange correction", loc="right", fontsize=9, pad=10)
+    ax[1].legend(frameon=False, fontsize=FIGURE_LEGENDSIZE)
+    style_axes(ax)
     savefig(fig, outdir, "Fig4_bright_observables")
 
 
-def make_figA1(data: np.ndarray, outdir: Path) -> None:
-    """Generate static image-series versus q-integral consistency check."""
-    rho_um = data[:, 0]
-    rel = data[:, 1]
-    r_const = 0.65
-
-    fig, ax = plt.subplots(figsize=(3.40, 2.12), layout="constrained")
-    ax.plot(rho_um, rel, lw=1.15)
-    ax.set_yscale("log")
-    ax.set_xlabel(r"$\rho$ ($\mu$m)")
-    ax.set_ylabel("relative difference")
-    ax.set_title(r"projection: zz", fontsize=7.1, loc="left", pad=3)
-    ax.set_title(rf"static limit check ($r={r_const}$)", fontsize=6.7, loc="right", pad=3)
-    ax.tick_params(axis="both", which="major", labelsize=7.0, width=0.8, length=2.7)
-    ax.tick_params(axis="both", which="minor", width=0.65, length=1.7)
-    for spine in ax.spines.values():
-        spine.set_linewidth(0.8)
-    ax.xaxis.label.set_size(8.0)
-    ax.yaxis.label.set_size(8.0)
-    panel_label(ax, "(a)", fontsize=8.2)
+def make_figA1(data, outdir):
+    """Show the static integral and image series, then their relative difference."""
+    rho = data[:, 0]
+    g_int = static_integral_constant_r(rho*1e-6)
+    g_img = static_image_constant_r(rho*1e-6)
+    # Multiplying by L^3 gives a dimensionless response in both representations.
+    fig, ax = plt.subplots(2, 1, figsize=(3.4, 3.8), sharex=True,
+                           height_ratios=(1.2, 1), layout="constrained")
+    ax[0].plot(rho, L**3*g_int, color=COLORS[0], lw=1.4, label="Integral")
+    ax[0].plot(rho[::10], L**3*g_img[::10], ls="none", marker="o", ms=3.5,
+               mfc="white", mec=COLORS[1], label="Image series")
+    ax[0].axhline(0, color="0.5", lw=.7)
+    ax[0].set_ylabel(r"$L^3\mathcal{G}_{BB,zz}^{\mathrm{sc}}$")
+    ax[0].legend(frameon=False, fontsize=FIGURE_LEGENDSIZE)
+    ax[0].set_title(r"Static response, $r=0.65$", loc="right", fontsize=8.5, pad=10)
+    ax[1].plot(rho, data[:, 1], lw=1.3)
+    ax[1].set_yscale("log")
+    ax[1].set_ylabel("Relative difference")
+    ax[1].set_xlabel(r"$\rho$ ($\mu$m)")
+    for j, a in enumerate(ax):
+        panel_label(a, f"({chr(97+j)})")
+    style_axes(ax)
     savefig(fig, outdir, "FigA1_static_limit_check")
+
+
+def propagating_green(rho, B, projection="zz", n_points=400):
+    """Full propagating interval at the midplane, with q=k0*L*sqrt(1-u^2)."""
+    if not (zA == zB == L/2):
+        raise ValueError("The propagating diagnostic assumes both probes at the midplane")
+    u, weights = np.polynomial.legendre.leggauss(n_points)
+    u, weights = (u+1)/2, weights/2
+    a = k0*L
+    q = a*np.sqrt(1-u*u)
+    kap_L = -1j*a*u
+    v = r_te_slab(q/L, B)*np.exp(-kap_L)
+    if projection == "zz":
+        paths = 2*v/(1-v)
+        prefactor = 1j*a**3*(1-u*u)/(4*np.pi*L**3)
+    elif projection == "perp_avg":
+        paths = 2*v/(1+v)
+        prefactor = -1j*a**3*u*u/(8*np.pi*L**3)
+    else:
+        raise ValueError("projection must be 'zz' or 'perp_avg'")
+    return np.sum(weights*prefactor*paths*j0(q*rho/L))
+
+
+def validate_numerical_details():
+    """Reproduce Appendix D at the nine stated bias/separation combinations."""
+    points = [(B, rho) for B in BVALS_3 for rho in (0., 3e-6, 8e-6)]
+    report = {
+        "test_bias_mT": [8.0, 16.5, 40.0],
+        "test_separation_um": [0.0, 3.0, 8.0],
+        "q_min": 1e-4, "q_max": 80.0, "reference_grid_points": 24000,
+        "grid_relative_differences": {}, "propagating_relative_contributions": {},
+    }
+    def components(values):
+        values = np.asarray(values)
+        return np.stack([values.real, values.imag])
+    for projection in ("zz", "perp_avg"):
+        reference = components([green_scalar(rho, B, projection=projection, nq=24000)
+                                for B, rho in points])
+        if np.any(reference == 0):
+            raise RuntimeError("A relative grid error is undefined at a zero reference")
+        errors = {}
+        for n in (6000, 12000):
+            values = components([green_scalar(rho, B, projection=projection, nq=n)
+                                 for B, rho in points])
+            errors[str(n)] = float(np.max(abs((values-reference)/reference)))
+        tolerance = 2e-7 if projection == "zz" else 3e-3
+        if not (errors["12000"] < errors["6000"] < tolerance):
+            raise RuntimeError(f"Grid convergence failed for {projection}: {errors}")
+        report["grid_relative_differences"][projection] = errors
+        baseline = components([green_scalar(rho, B, projection=projection)
+                               for B, rho in points])
+        prop_values, contributions = [], {}
+        for n in (200, 400, 800):
+            values = np.asarray([propagating_green(rho, B, projection, n)
+                                 for B, rho in points])
+            prop_values.append(values)
+            contributions[str(n)] = float(np.max(abs(components(values)/baseline)))
+        for values in prop_values[:-1]:
+            if not np.allclose(values, prop_values[-1], rtol=1e-9, atol=0):
+                raise RuntimeError(f"Propagating quadrature failed to converge: {projection}")
+        report["propagating_relative_contributions"][projection] = contributions
+        print(f"  {projection} grid relative differences: {errors}")
+        print(f"  {projection} propagating relative contributions: {contributions}")
+    free = float(free_exchange_mHz(3e-6))
+    correction = float(omega_mHz(green_scalar(3e-6, B_on)))
+    report["exchange_at_3um_16p5mT_mHz"] = {
+        "free_space": free, "cavity_correction": correction, "total": free+correction,
+    }
+    return report
+
 
 # ---------------------------------------------------------------------------
 # Main
@@ -601,7 +634,11 @@ def main() -> None:
         "--validate", action="store_true",
         help="recompute all data in memory, compare with the CSV files, and run static-limit checks",
     )
+    parser.add_argument("--validation-json", type=Path,
+                        help="write numerical diagnostics to JSON (requires --validate)")
     args = parser.parse_args()
+    if args.validation_json is not None and not args.validate:
+        parser.error("--validation-json requires --validate")
 
     here    = Path(__file__).parent
     csv_fig3  = here / "data_fig3.csv"
@@ -654,6 +691,12 @@ def main() -> None:
                     f"static {projection} projection check failed (max relative difference {rel:.3e})"
                 )
             print(f"  static {projection}: max relative difference {rel:.3e}")
+
+    if args.validate:
+        diagnostics = validate_numerical_details()
+        if args.validation_json is not None:
+            args.validation_json.parent.mkdir(parents=True, exist_ok=True)
+            args.validation_json.write_text(json.dumps(diagnostics, indent=2) + "\n")
 
     print(f"Writing figures to {args.outdir.resolve()} ...")
     make_fig2(args.outdir)
