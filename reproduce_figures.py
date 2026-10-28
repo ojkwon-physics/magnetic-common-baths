@@ -9,7 +9,7 @@ Usage
   python reproduce_figures.py --recompute   # recompute from physics, update CSVs, generate figures
   python reproduce_figures.py --outdir DIR  # write PDF/PNG figures to DIR (default: figures/)
   python reproduce_figures.py --validate    # compare CSVs with recomputation and check static limits
-  python reproduce_figures.py --report      # print the scattering-sector ratio
+  python reproduce_figures.py --report      # print the cavity-induced linewidth ratio
   python reproduce_figures.py --validate --validation-json validation_results.json
 """
 
@@ -434,7 +434,7 @@ def make_fig2(outdir: Path) -> None:
                ha="right", va="bottom", fontsize=8.4, bbox=text_bbox)
 
     cb = fig.colorbar(im0, ax=[ax[0], ax[1]], shrink=0.91, pad=0.018)
-    cb.set_label(r"$\log_{10}|r_{\mathrm{TE}}|$", fontsize=9.0)
+    cb.set_label(r"$\log_{10}|r_s|$", fontsize=9.0)
     cb.ax.tick_params(labelsize=8.3)
 
     finite_cut = np.abs(r_te_slab(kk, B_on, half_space=False))
@@ -447,7 +447,7 @@ def make_fig2(outdir: Path) -> None:
     yline = np.r_[finite_cut, half_cut]
     ax[2].set_ylim(max(0.0, 0.983 * np.nanmin(yline)), 1.055 * np.nanmax(yline))
     ax[2].set_xlabel(r"$k_\perp L$")
-    ax[2].set_ylabel(r"$|r_{\mathrm{TE}}|$")
+    ax[2].set_ylabel(r"$|r_s|$")
     ax[2].tick_params(axis="both", which="major", labelsize=8.8)
 
     ax[2].set_title(r"$B=16.5$ mT", fontsize=8.5, loc="right", pad=9)
@@ -629,7 +629,7 @@ def main() -> None:
     parser.add_argument("--outdir", type=Path, default=Path("figures"),
                         help="output directory for PDF/PNG figures (default: figures/)")
     parser.add_argument("--report", action="store_true",
-                        help="also evaluate the scattering-sector ratio quoted in the abstract")
+                        help="also evaluate the cavity-induced linewidth ratio quoted in the abstract")
     parser.add_argument(
         "--validate", action="store_true",
         help="recompute all data in memory, compare with the CSV files, and run static-limit checks",
@@ -718,7 +718,7 @@ def main() -> None:
         print(f"At B = {B_on * 1e3:.1f} mT, rho = {rho_ref * 1e6:.1f} um:")
         print(f"  delta gamma_12 / 2pi    = {g12:.3f} mHz")
         print(f"  delta gamma_11 / 2pi    = {g11:.3f} mHz")
-        print(f"  scattering-sector ratio = {2.0 * abs(g12) / g11:.3f}")
+        print(f"  cavity-induced linewidth ratio = {2.0 * abs(g12) / g11:.3f}")
 
     print("Done.")
 
